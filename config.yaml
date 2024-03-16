@@ -1,20 +1,20 @@
-out_fn: results_clicktag/
-scdb_path: data_cdna/scdb
-lib: 240124_Mlei11_10x
-ctmat_fn: ~/Documents/projects/mlei_development/Mlei11/data_clicktag/240124_Mlei11_10x/matrix_counts/
-ctbcs_fn: ~/Documents/projects/mlei_development/Mlei11/data_clicktag/240124_Mlei11_10x/list_clicktag_barcodes.csv
-cdna_lib_fn: ~/Documents/projects/mlei_development/Mlei11/data_cdna/240124_Mlei11_10x/raw_feature_bc_matrix/
-cz_large_thr: 20000
-cz_small_thr: 500
-min_ct: 10
-n_top_drops: 50000
-n_amb: 1000
-pval_thr: 0.001
-n_sim: 1000
-classification_mode: bySUM
-num_ct: 2
-min_bc_matches: 2
-labels: ambient,ambiguous,doublet
+out_fn: results_clicktag/ # the name of the output folder 
+scdb_path: data_cdna/scdb # the name of the metacell:: db to create 
+lib: 240124_MyBeast_10x # library prefix 
+ctmat_fn: data_clicktag/KALLISTO_RESULT/matrix_counts/ # path to matrix_counts/ output of kallisto
+ctbcs_fn: data_clicktag/list_clicktag_barcodes.csv # csv file specifying CT combinations: CT_name,CT_seq,Batch_ID
+cdna_lib_fn: data_cdna/CELLRANGER_RESULT/raw_feature_bc_matrix/
+cz_large_thr: 20000 # maximum cDNA UMI size allowed 
+cz_small_thr: 500 # minimum size
+min_ct: 10 # minimum number of CT reads 
+n_top_drops: 50000 # how many top droplets to select ( more is better)
+n_amb: 1000 # how many low-count cDNA profiles to select for the ambient noise estimation 
+pval_thr: 0.001 # p-value above which to assign the droplet to a combo
+n_sim: 1000 # number of simulations PER DROPLET
+classification_mode: bySUM # mode of classification: bySUM, byCT
+num_ct: 2 # number of clicktags per sample 
+min_bc_matches: 2 # minimum number of CT matches required 
+labels: ambient,ambiguous,doublet # labels for unclassified droplets
 # LDA settings 
 useLDA: yes # yes/no - whether to use LDA
 Posterior_prob_threshold: 0.99 # assign the droplets using this posterior probability threshold

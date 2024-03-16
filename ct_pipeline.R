@@ -18,7 +18,7 @@
 ################################################################################
 #setwd('~/Documents/projects/mlei_development/ct_pipeline/')
 #configfile = 'configs/sample.yaml'
-source('scripts/clicktag_helper.R')
+source('helper.R')
 ################################################################################
 args = commandArgs(trailingOnly=TRUE)
 if(length(args)<1){
