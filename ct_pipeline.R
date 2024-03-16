@@ -18,7 +18,7 @@
 ################################################################################
 #setwd('~/Documents/projects/mlei_development/ct_pipeline/')
 #configfile = 'configs/sample.yaml'
-
+source('scripts/clicktag_helper.R')
 ################################################################################
 args = commandArgs(trailingOnly=TRUE)
 if(length(args)<1){
@@ -27,7 +27,7 @@ if(length(args)<1){
 }
 options(warn=-1)
 options(max.print = 20)
-suppressMessages(source("helper.R"))
+suppressMessages(source("scripts/clicktag_helper.R"))
 suppressMessages(library('ComplexHeatmap'))
 suppressMessages(library("scales"))
 suppressMessages(library("metacell"))
@@ -333,17 +333,6 @@ mat_f = tgScMat(mat_cdna[,rownames(md)], stat_type = "umi", cell_metadata = md)
 matid = sprintf("%s_CTfilt",lib)
 metacell::scdb_add_mat(matid, mat_f)
 message(sprintf("Added a new mat object to %s:\n%s/mat.%s.Rda",scdb_path,scdb_path,matid))
-
-########### Separate by stage #########################################
-md$stage = sapply(str_split(md$clicktag_label,'_'),FUN = function(x) x[1])
-for(stage in unique(md$stage)){
-  ids = rownames(md[md$stage == stage,])
-  mat_f = tgScMat(mat_cdna[,ids], stat_type = "umi", cell_metadata = md[ids,])
-  # save filtered matrix
-  matid = sprintf("%s_CTfilt.%s",lib,stage)
-  metacell::scdb_add_mat(matid, mat_f)
-  message(sprintf("Added a new mat object to %s:\n%s/mat.%s.Rda",scdb_path,scdb_path,matid))
-}
 
 ########### 5. QC and diagnostic plots #########################################
 ##### 1. Scatterplot of cDNA UMIs vs CT per CT ##########
