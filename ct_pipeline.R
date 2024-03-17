@@ -18,8 +18,17 @@
 ################################################################################
 #setwd('~/Documents/projects/mlei_development/ct_pipeline/')
 #configfile = 'configs/sample.yaml'
-source('helper.R')
 ################################################################################
+getScriptPath <- function(){
+	    cmd.args <- commandArgs()
+    m <- regexpr("(?<=^--file=).+", cmd.args, perl=TRUE)
+        script.dir <- dirname(regmatches(cmd.args, m))
+        if(length(script.dir) == 0) stop("can't determine script dir: please call the script with Rscript")
+	    if(length(script.dir) > 1) stop("can't determine script dir: more than one '--file' argument detected")
+	    return(script.dir)
+}
+dir = getScriptPath()
+
 args = commandArgs(trailingOnly=TRUE)
 if(length(args)<1){
   message('Please, specify a config.yaml file!')
@@ -27,7 +36,6 @@ if(length(args)<1){
 }
 options(warn=-1)
 options(max.print = 20)
-suppressMessages(source("scripts/clicktag_helper.R"))
 suppressMessages(library('ComplexHeatmap'))
 suppressMessages(library("scales"))
 suppressMessages(library("metacell"))
@@ -35,6 +43,7 @@ suppressMessages(library("yaml"))
 suppressMessages(library("stringr"))
 suppressMessages(library("reshape2"))
 suppressMessages(library('circlize'))
+source(sprintf('%s/helper.R',dir))
 ############ -1. Input & Output ###############
 configfile = args[1]
 #configfile = 'configs/231219_Mlei09_10x.ct_config.yaml'
@@ -346,7 +355,6 @@ abline(v = log10(cz_large_thr),lty = 2,col = 'red')
 hist(log10(Matrix::colSums(mat_ct)),breaks = 100,main = 'log10 CT UMIs [all droplets]',xlab = '')
 abline(v = log10(min_ct),lty = 2,col = 'red')
 par(mfrow = c(1,1))
-plot(Matrix::colSums(mat_cdna),Matrix::colSums(mat_ct))
 plot(Matrix::colSums(mat_cdna),Matrix::colSums(mat_ct),pch = 16,cex = 0.3,col = scales::alpha('black',0.3),
      log = 'xy',xlab = 'cDNA UMIs',ylab = 'CT UMIs',main = 'cDNA ~ CT [all droplets]')
 abline(v = cz_small_thr,lty = 2,col = 'red')
