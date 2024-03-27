@@ -115,8 +115,10 @@ if('useLDA' %in% names(config)){
 dir.create(scdb_path, showWarnings = TRUE,recursive = T)
 metacell::scdb_init(scdb_path,force_reinit=TRUE)
 ########### 1. Load CT and cDNA data ##############
-message('1. Loading the data')
+message('1. Loading data')
+message(paste0('Loading CT counts from\n',ctmat_fn))
 mat_ct = .ct_load_ct(ctmat_fn)
+message(paste0('Loading cDNA counts from\n',cdna_lib_fn,'\n'))
 mat_cdna = .ct_load_cr(cdna_lib_fn)
 int = intersect(colnames(mat_ct),colnames(mat_cdna))
 message(sprintf('%s common barcodes.',length(int)))
@@ -125,6 +127,8 @@ mat_cdna = mat_cdna[,int]
 # reorder cDNA matrix by the library size:
 mat_cdna = mat_cdna[,order(Matrix::colSums(mat_cdna),decreasing = T)]
 mat_ct = mat_ct[,colnames(mat_cdna)]
+N_CT_UMI=sum(mat_ct)
+message(sprintf('Total number of CT UMIs: %s',N_CT_UMI))
 # Load barcode information:
 bct = .ct_load_bc(ctbcs_fn,verbose = T)
 bc2lib = setNames(bct$barcode_pair,bct$name)
@@ -339,7 +343,8 @@ md = md[!md$clicktag_label %in% c(labels[['label_doublet']],labels[['label_ambig
 md$lib = lib
 mat_f = tgScMat(mat_cdna[,rownames(md)], stat_type = "umi", cell_metadata = md)
 # save filtered matrix
-matid = sprintf("%s_CTfilt",lib)
+#matid = sprintf("%s_CTfilt",lib)
+matid = lib
 metacell::scdb_add_mat(matid, mat_f)
 message(sprintf("Added a new mat object to %s:\n%s/mat.%s.Rda",scdb_path,scdb_path,matid))
 
@@ -382,7 +387,8 @@ fname = sprintf('%s/qc_ct_heatmap.pdf',figsdir)
 pdf(fname,height = 15, width = 10)
 par(mfrow = c(3,2))
 
-ids_to_plot = c(putative_cells_ids,ambient_ids)
+#ids_to_plot = c(putative_cells_ids,ambient_ids)
+ids_to_plot = putative_cells_ids  # 28.03.24 - changed to remove ambient profiles
 mr = as.matrix(t(mat_ct[,ids_to_plot]))
 m_n = t(t(mr) / Matrix::colSums(mr, na.rm = TRUE)) * 1e4
 m_n = apply(m_n, 2, function(c) c + quantile(c, 0.001, na.rm = TRUE))
