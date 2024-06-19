@@ -16,8 +16,6 @@
 # output comparison between simulation and LDA
 # Implement safety checks
 ################################################################################
-#setwd('~/Documents/projects/mlei_development/ct_pipeline/')
-#configfile = 'configs/sample.yaml'
 ################################################################################
 getScriptPath <- function(){
 	    cmd.args <- commandArgs()
@@ -137,7 +135,14 @@ message('2. Selecting the droplets by:\n - min cDNA UMI\n - min CT UMI')
 cdna_size = Matrix::colSums(mat_cdna)
 ct_size = Matrix::colSums(mat_ct)
 putative_cells_ids = colnames(mat_cdna)[cdna_size >= cz_small_thr & cdna_size < cz_large_thr & ct_size >= min_ct]
-message(sprintf('%s droplets passing the thresholds',length(putative_cells_ids)))
+n_pass_cdna = sum(cdna_size >= cz_small_thr & cdna_size < cz_large_thr)
+n_pass_ct = sum(ct_size >= min_ct)
+too_big = sum(cdna_size >= cz_large_thr)
+too_small = sum(cdna_size < cz_small_thr)
+message(sprintf('%s droplets pass the cDNA thresholds (%s too small, %s too big)',n_pass_cdna,too_small,too_big))
+message(sprintf('%s droplets pass the CT thresholds',n_pass_ct))
+message(sprintf('%s droplets passing both thresholds',length(putative_cells_ids)))
+
 ########### 3. Classify droplets by simulation #################################
 message(paste0('3. Classifying the droplets by simulation ... mode:',classification_mode))
 # This code should take as an input:
@@ -305,11 +310,14 @@ if(useLDA){
   
   }
   message(cat(paste0(sapply(seq_along(levels(status)),FUN = function(i) paste0(names(table(status)[i]),' : ',table(status)[i])),collapse = '\n')))
-stats = .do_ct_report(status,labels)
-write.table(data.frame(stats),sprintf('%s/ct_stats.tsv',out_fn),quote = F,sep = '\t',col.names = F)
+ctstats = data.frame(.do_ct_report(status,labels,putative_cells_ids))
+# add cell filtering stats 
+ctstats$n_pass_cdna = n_pass_cdna
+ctstats$n_pass_ct = n_pass_ct
+ctstats$too_big = too_big
+ctstats$too_small = too_small
 
-# the doublet rate is too low.
-# how to become more restrictive 
+write.table(ctstats,sprintf('%s/ct_stats.tsv',out_fn),quote = F,sep = '\t',col.names = T)
 write.table(status, sprintf('%s/cell_classification.tsv',out_fn),sep = '\t',quote=F,col.names = F)
 write.table(t(mat_ct[,names(status)]),sprintf('%s/cell_ct.tsv',out_fn),sep = '\t',quote=F,col.names = T)
 write.table(status, sprintf('%s/cell_classification.tsv',out_fn),sep = '\t',quote=F,col.names = F)
@@ -371,8 +379,8 @@ plot(Matrix::colSums(mat_cdna),lfc,pch = 16,cex = 0.3,col = scales::alpha('black
      log = 'xy',xlab = 'cDNA UMIs',ylab = sprintf('log2 [top %s CTs] / [non-top]',num_ct),main = 'cDNA ~ CT [all droplets]')
 abline(v = cz_small_thr,lty = 2,col = 'red')
 abline(v = cz_large_thr,lty = 2,col = 'red')
-abline(h = 1,lty = 2,col = 'red')
-
+abline(h = 1,lty = 2,col = 'red') # just to specify the enrichment 
+abline(h = median(lfc[rownames(md)]),lty = 2, col = 'blue')
 #par(mfrow = c(1,1))
 #plot(log10(Matrix::colSums(mat_cdna[,putative_cells_ids])),log10(Matrix::colSums(mat_ct[,putative_cells_ids])),
 #     pch = 16, col = scales::alpha('black',0.3),xlab = 'log10 cDNA UMIs', ylab = 'log10 CT UMIs',main = 'cDNA ~ CT [putative cells]')

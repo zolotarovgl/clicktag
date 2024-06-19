@@ -165,3 +165,41 @@ xavis_green = function(m=NULL,qs = c(.25,.5,.75,.99),reverse = F){
   return(setNames(c(n_nonempty,n_assigned,assignment_rate,n_ambient,ambient_rate,n_ambig,ambig_rate,discard_rate,n_doublet,doublet_rate1,doublet_rate2),c(c("n_nonempty","n_assigned","assignment_rate","n_ambient","ambient_rate","n_ambig","ambig_rate","discard_rate",'n_doublet',"doublet_rate1","doublet_rate2"))))
 }
 
+# 19.06.2024 - clearer reporting 
+.do_ct_report = function(status,labels,putative_cells_ids){
+  o = list()
+  o$n_cells = length(putative_cells_ids)
+
+  o$n_singlet = sum(table(status[!status %in% unlist(labels)]))
+  o$n_doublet = table(status)[labels[['label_doublet']]]
+  
+  o$n_nonambient = sum(table(status)[names(table(status)) != labels[['label_ambient']]])
+  
+  o$n_ambient = sum(status == labels[['label_ambient']])
+  o$n_ambig = table(status)[labels[['label_ambiguous']]]
+
+  o$n_stained = o$n_singlet + o$n_doublet
+  n_cells = o$n_cells 
+  n_singlet = o$n_singlet
+  n_doublet = o$n_doublet
+  n_ambient = o$n_ambient
+  n_ambig = o$n_ambig
+  n_stained = n_singlet + n_doublet 
+
+  o$n_nonambient = n_cells - n_ambient
+  o$ambig_rate = round(n_ambig/n_cells*100,2)
+  o$ambient_rate = round(n_ambient/n_cells*100,2) # proportion of cells with "empty" clicktag profile
+  o$singlet_rate = round(n_singlet/n_cells*100,2)
+  o$stain_rate = round((n_singlet + n_doublet)/n_cells*100,2)
+  o$discard_rate = round((n_doublet+n_ambig+n_ambient)/n_cells*100,2)
+  o$doublet_rate_stained = round((n_doublet)/(n_stained)*100,2)
+  o$doublet_rate_cells = round((n_doublet)/(n_cells)*100,2)
+  
+  # print stats 
+  library(dplyr)
+  print(tibble(name = names(o), value = unlist(o)))
+
+  return(o)
+}
+
+

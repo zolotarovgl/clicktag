@@ -9,7 +9,7 @@ cz_small_thr: 500 # minimum size
 min_ct: 10 # minimum number of CT reads 
 n_top_drops: 50000 # how many top droplets to select ( more is better)
 n_amb: 1000 # how many low-count cDNA profiles to select for the ambient noise estimation 
-pval_thr: 0.001 # p-value above which to assign the droplet to a combo
+pval_thr: 0.001 # p-value above which to assign the droplet to a barcode combination
 n_sim: 1000 # number of simulations PER DROPLET
 classification_mode: bySUM # mode of classification: bySUM, byCT
 num_ct: 2 # number of clicktags per sample 
