@@ -359,25 +359,33 @@ abline(v = log10(cz_small_thr),lty = 2,col = 'red')
 abline(v = log10(cz_large_thr),lty = 2,col = 'red')
 hist(log10(Matrix::colSums(mat_ct)),breaks = 100,main = 'log10 CT UMIs [all droplets]',xlab = '')
 abline(v = log10(min_ct),lty = 2,col = 'red')
-par(mfrow = c(1,1))
+par(mfrow = c(3,2))
 plot(Matrix::colSums(mat_cdna),Matrix::colSums(mat_ct),pch = 16,cex = 0.3,col = scales::alpha('black',0.3),
      log = 'xy',xlab = 'cDNA UMIs',ylab = 'CT UMIs',main = 'cDNA ~ CT [all droplets]')
 abline(v = cz_small_thr,lty = 2,col = 'red')
 abline(v = cz_large_thr,lty = 2,col = 'red')
 abline(h = min_ct,lty = 2,col = 'red')
-par(mfrow = c(1,1))
-plot(log10(Matrix::colSums(mat_cdna[,putative_cells_ids])),log10(Matrix::colSums(mat_ct[,putative_cells_ids])),
-     pch = 16, col = scales::alpha('black',0.3),xlab = 'log10 cDNA UMIs', ylab = 'log10 CT UMIs',main = 'cDNA ~ CT [putative cells]')
-lm1 = lm(log10(Matrix::colSums(mat_ct[,putative_cells_ids]))~log10(Matrix::colSums(mat_cdna[,putative_cells_ids])))
-abline(lm1,col = 'red')
 
-par(mfrow = c(4,2))
-for(label in c(unlist(labels),bc2lib[!duplicated(bc2lib)])){
-  if(sum(status == label)>10){
-    plot(Matrix::colSums(mat_cdna[,names(status[status == label])]),Matrix::colSums(mat_ct[,names(status[status == label])]),
-         pch = 16, col = scales::alpha('black',0.3),xlab = 'cDNA UMIs', ylab = 'CT UMIs',main = label,log = 'xy') 
-  }
-}
+lfc = apply(mat_ct,2,FUN = function(x) log2(sum(sort(x,decreasing = T)[1:num_ct])/sum(sort(x,decreasing = T)[-c(1:num_ct)])))
+plot(Matrix::colSums(mat_cdna),lfc,pch = 16,cex = 0.3,col = scales::alpha('black',0.3),
+     log = 'xy',xlab = 'cDNA UMIs',ylab = sprintf('log2 [top %s CTs] / [non-top]',num_ct),main = 'cDNA ~ CT [all droplets]')
+abline(v = cz_small_thr,lty = 2,col = 'red')
+abline(v = cz_large_thr,lty = 2,col = 'red')
+abline(h = 1,lty = 2,col = 'red')
+
+#par(mfrow = c(1,1))
+#plot(log10(Matrix::colSums(mat_cdna[,putative_cells_ids])),log10(Matrix::colSums(mat_ct[,putative_cells_ids])),
+#     pch = 16, col = scales::alpha('black',0.3),xlab = 'log10 cDNA UMIs', ylab = 'log10 CT UMIs',main = 'cDNA ~ CT [putative cells]')
+#lm1 = lm(log10(Matrix::colSums(mat_ct[,putative_cells_ids]))~log10(Matrix::colSums(mat_cdna[,putative_cells_ids])))
+#abline(lm1,col = 'red')
+
+#par(mfrow = c(4,2))
+#for(label in c(unlist(labels),bc2lib[!duplicated(bc2lib)])){
+#  if(sum(status == label)>10){
+#    plot(Matrix::colSums(mat_cdna[,names(status[status == label])]),Matrix::colSums(mat_ct[,names(status[status == label])]),
+#         pch = 16, col = scales::alpha('black',0.3),xlab = 'cDNA UMIs', ylab = 'CT UMIs',main = label,log = 'xy') 
+#  }
+#}
 dev.off()
 
 ##### 2. CT counts heatmaps ##########
