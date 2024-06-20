@@ -317,7 +317,7 @@ ctstats$n_pass_ct = n_pass_ct
 ctstats$too_big = too_big
 ctstats$too_small = too_small
 
-write.table(ctstats,sprintf('%s/ct_stats.tsv',out_fn),quote = F,sep = '\t',col.names = T)
+write.table(ctstats,sprintf('%s/ct_stats.tsv',out_fn),quote = F,sep = '\t',col.names = T,row.names = F)
 write.table(status, sprintf('%s/cell_classification.tsv',out_fn),sep = '\t',quote=F,col.names = F)
 write.table(t(mat_ct[,names(status)]),sprintf('%s/cell_ct.tsv',out_fn),sep = '\t',quote=F,col.names = T)
 write.table(status, sprintf('%s/cell_classification.tsv',out_fn),sep = '\t',quote=F,col.names = F)
