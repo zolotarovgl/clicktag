@@ -11,10 +11,7 @@
 
 
 # TODOS:
-# rewrite the pipeline so it's built in a more logical way
-# if useLDA, classify by simulation, then use this as a training set => run LDA
-# output comparison between simulation and LDA
-# Implement safety checks
+# Fix LDA 
 ################################################################################
 ################################################################################
 getScriptPath <- function(){
