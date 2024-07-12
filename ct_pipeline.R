@@ -166,8 +166,6 @@ status = .classify_cells_by_simulation(mat_ct[,putative_cells_ids],probs = probs
 if(useLDA){
   library(MASS)
   message("Training LDA classifier using positive examples")
-  #postprob_thr = 0.99
-  #multiplet_rate = 0.16 # assumed multiplet rate
   
   message(sprintf('Posterior probability threshold: %s',postprob_thr))
   
@@ -243,12 +241,11 @@ if(useLDA){
   m = m[,-1]
   m = m[!rownames(m) %in% labels[labels != labels['label_doublet']],]
   m = m[,!colnames(m) %in% labels[labels != labels['label_doublet']]]
-  # how do we compare this properly? 
-  # gosh, I want to smart as xavi
-  # I'm repeating the same analyses over and over - why? 
+  
   mf = m
   m = m/sum(m)
   m[m==0] = NA
+  
   ra = rowAnnotation(N = anno_barplot(rowSums(mf)))
   ha = HeatmapAnnotation(N = anno_barplot(colSums(mf)))
   hm = Heatmap(m,cluster_rows = F,cluster_columns = F,
@@ -296,7 +293,7 @@ if(useLDA){
             }
           },column_title = sprintf('Doublet proportions: %s droplets',nrow(d)))
   
-  
+  message('how about here?')
   # Plot 
   fname = sprintf('%s/lda.pdf',figsdir)
   pdf(fname,height = 10, width = 10)
