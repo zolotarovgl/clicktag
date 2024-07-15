@@ -11,7 +11,7 @@
 
 
 # TODOS:
-# Fix LDA 
+# Fix LDA !
 ################################################################################
 ################################################################################
 getScriptPath <- function(){
@@ -41,7 +41,7 @@ suppressMessages(library('circlize'))
 source(sprintf('%s/helper.R',dir))
 ############ -1. Input & Output ###############
 configfile = args[1]
-#configfile = 'configs/231219_Mlei09_10x.ct_config.yaml'
+#configfile = 'configs/Mlei13.sim.sum.10.yaml'
 message(sprintf('Reading pipeline setttings from %s.',configfile))
 config = read_yaml(configfile)
 config = unlist(config)
@@ -52,6 +52,9 @@ ctbcs_fn = config['ctbcs_fn'] # path to barcodes.pairs.csv file
 cdna_lib_fn = config[['cdna_lib_fn']] # path to raw_feature_bc_matrix/ from cell ranger
 
 out_fn = config['out_fn'] # name of the output directory 
+if(!dir.exists(out_fn)){
+  dir.create(out_fn,recursive = T)
+}
 figsdir = sprintf("%s/figs",out_fn)
 scdb_path = config['scdb_path'] # a path to where put the metacell object to
 
@@ -108,6 +111,7 @@ if('useLDA' %in% names(config)){
 
 # init metacell database to export the filtered matrix
 dir.create(scdb_path, showWarnings = TRUE,recursive = T)
+
 metacell::scdb_init(scdb_path,force_reinit=TRUE)
 ########### 1. Load CT and cDNA data ##############
 message('1. Loading data')
@@ -159,151 +163,13 @@ probs = rowSums(empty_set)/sum(empty_set)
 # Simulate the cells:
 # - this step is used to tell apart the empty cells vs non-empty cells 
 status = .classify_cells_by_simulation(mat_ct[,putative_cells_ids],probs = probs,n_sim = n_sim,pval_thr = pval_thr,bc2lib = bc2lib,labels = labels,pval_mode = classification_mode,min_bc_matches = min_bc_matches)
+
 # LDA should be better here 
 if(useLDA){
-  library(MASS)
-  message("Training LDA classifier using positive examples")
-  
-  message(sprintf('Posterior probability threshold: %s',postprob_thr))
-  
-  bl_labels = unlist(labels) # labels to exclude from training 
-  
-  n_train = round(length(status[!status %in% bl_labels])*0.6)
-  message(sprintf('%s train examples.',n_train))
-  train_ids = names(sample(status[!status %in% bl_labels],n_train,replace = F))
-  test_ids = names(status[!status %in% bl_labels])[!names(status[!status %in% bl_labels]) %in% train_ids]
-  
-  training = as.data.frame(t(mat_ct[,train_ids]))
-  training = log(training+1)
-  training$label = as.character(status[rownames(training)])
-  
-  test = as.data.frame(t(mat_ct[,test_ids]))
-  test = log(test+1)
-  test$label = as.character(status[rownames(test)])
-  
-  
-  linear = lda(label ~ ., data = training)
-  pred = predict(linear, training)$class
-  tab <- table(Predicted = pred, Actual = training$label)
-  train_acc = round(sum(diag(tab))/sum(tab),2)
-  
-  pred = predict(linear, test)$class
-  tab <- table(Predicted = pred, Actual = test$label)
-  test_acc = round(sum(diag(tab))/sum(tab),2)
-  
-  message(sprintf('Training accuracy: %s',train_acc))
-  message(sprintf('Test accuracy: %s',test_acc))
-  
-  # CAVE: the ground truth is unknown here 
-  train_ids = names(status[!status %in% unlist(labels)])
-  training = as.data.frame(t(mat_ct[,train_ids]))
-  training = log(training+1)
-  training$label = as.character(status[rownames(training)])
-  linear = lda(label ~ ., data = training)
-  saveRDS(linear,sprintf('%s/lda.RData',out_fn))
-  linear = readRDS(sprintf('%s/lda.RData',out_fn))
-  
-  # ploat loadings 
-  m = as.matrix(linear$scaling)
-  rownames(m) = paste0(rownames(m),': ',setNames(bct$barcode_pair,bct$name)[rownames(m)])
-  cw = ch = unit(10,'mm')
-  hm_lda = Heatmap(m,cluster_rows = F,cluster_columns = F,border = T,width = ncol(m)*cw,height = nrow(m)*ch)
-  
-  # predict all non-ambient profiles:
-  topredict_ids = putative_cells_ids[status[putative_cells_ids] != 'ambient']
-  topredict = as.data.frame(log(t(mat_ct[,topredict_ids])+1))
-  pred = predict(linear, topredict)
-  predicted = setNames(pred$class,rownames(topredict))
-  
-  # now, identify the doublets
-  # multiplet rate should be 12-20% 
-  top_prob = apply(pred$posterior,1,max)
-  nontop_prob = 1-apply(pred$posterior,1,FUN = function(x) sort(x,decreasing = T)[1])
-  thrs = seq(0.0001,0.1,0.0001)
-  
-  multiplet_rates = sapply(thrs,FUN = function(x) sum(nontop_prob>=x)/length(nontop_prob))
-  nontop_thr = thrs[which.min(abs(multiplet_rates-multiplet_rate))] # select the threshold that gives the 
-  message(sprintf('LDA: Selected non-top posterior prob threshold: %s',nontop_thr))
-  # closest proportion of multiplets to the aimed proportion 
-  # you can also classify the multiplets here.
-  status2 = setNames(as.character(apply(pred$posterior,1,FUN = function(x) colnames(pred$posterior)[which.max(x)])),rownames(pred$posterior))
-  status2[top_prob<postprob_thr] = labels['label_ambiguous']
-  status2[nontop_prob >= nontop_thr] = 'doublet'
-  status2 = c(status2,setNames(as.character(status[status %in% labels['label_ambient']]),names(status[status %in% labels['label_ambient']])))
-  status2 = status2[names(status)]
-  # now you can compare 2 classifications 
-  d = data.frame(by_sim = as.character(status),by_lda = as.character(status2))
-  m = dcast(d,by_sim ~ by_lda,fill = 0)
-  rownames(m) = m[,1]
-  m = m[,-1]
-  m = m[!rownames(m) %in% labels[labels != labels['label_doublet']],]
-  m = m[,!colnames(m) %in% labels[labels != labels['label_doublet']]]
-  
-  mf = m
-  m = m/sum(m)
-  m[m==0] = NA
-  
-  ra = rowAnnotation(N = anno_barplot(rowSums(mf)))
-  ha = HeatmapAnnotation(N = anno_barplot(colSums(mf)))
-  hm = Heatmap(m,cluster_rows = F,cluster_columns = F,
-          right_annotation = ra,
-          bottom_annotation = ha,
-          cell_fun = function(j, i, x, y, w, h, col) { # add text to each grid
-            if(mf[i, j]>0){
-              grid.text(mf[i, j], x, y)
-            }
-          },
-          column_title = 'LDA classification',
-          row_title = 'Simulation'
-          )
-
-  status_res = status2
-  status_res[status == 'doublet' | status2 == 'doublet'] = 'doublet'
-  sum(status_res == 'doublet')/length(status_res) # global status res
-  sum(status_res == 'doublet')/length(status_res[status_res != 'ambient']) # stained doublet rate
-  status = factor(status_res,levels = c(labels,bct$barcode_pair[!duplicated(bct$barcode_pair)]))
-
-  # doublet counts heatmap 
-  m = pred$posterior
-  nontop_prob = 1-apply(m,1,FUN = function(x) sort(x,decreasing = T)[1])
-  m = m[nontop_prob>=nontop_thr,]
-  # now, how do we assign them? 
-  # types of doublets:
-  dbl_thr = 1-postprob_thr
-  dbl = apply(m>=dbl_thr,1,FUN = function(x) paste0(sort(colnames(m)[which(x)]),collapse = '.'))
-  dbl = dbl[str_count(dbl,'\\.')==1]
-  d = as.data.frame(do.call(rbind,str_split(dbl,'\\.')))
-  rownames(d) = names(dbl)
-  d$V1 = factor(d$V1,levels = bct$barcode_pair[!duplicated(bct$barcode_pair)])
-  d$V2 = factor(d$V2,levels = bct$barcode_pair[!duplicated(bct$barcode_pair)])
-  m = dcast(d,V1 ~ V2,fill = 0,drop = F)
-  rownames(m) = m[,1]
-  m = m[,-1]
-  m = m/sum(m)
-  m[m==0] = NA
-  hm_dbl = Heatmap(m,cluster_rows = F,cluster_columns = F,
-          height = nrow(m)*ch,
-          width = ncol(m)*cw,
-          cell_fun = function(j, i, x, y, w, h, col) { # add text to each grid
-            if(!is.na(m[i, j])){
-              grid.text(round(m[i, j]*100,1), x, y)
-            }
-          },column_title = sprintf('Doublet proportions: %s droplets',nrow(d)))
-  
-  message('how about here?')
-  # Plot 
-  fname = sprintf('%s/lda.pdf',figsdir)
-  pdf(fname,height = 10, width = 10)
-  draw(hm_lda)
-  draw(hm)
-  draw(hm_dbl)
-  dev.off()  
-  
-  # save posterior probabilities
-  write.table(pred$posterior,sprintf('%s/lda.posterior.tsv',out_fn),sep = '\t',quote = F)
-  
+  .run_lda()
+  raise('Not implemented yet')
   }
-  message(cat(paste0(sapply(seq_along(levels(status)),FUN = function(i) paste0(names(table(status)[i]),' : ',table(status)[i])),collapse = '\n')))
+#message(cat(paste0(sapply(seq_along(levels(status)),FUN = function(i) paste0(names(table(status)[i]),' : ',table(status)[i])),collapse = '\n')))
 ctstats = data.frame(.do_ct_report(status,labels,putative_cells_ids))
 # add cell filtering stats 
 ctstats$n_pass_cdna = n_pass_cdna
@@ -315,6 +181,8 @@ write.table(ctstats,sprintf('%s/ct_stats.tsv',out_fn),quote = F,sep = '\t',col.n
 write.table(status, sprintf('%s/cell_classification.tsv',out_fn),sep = '\t',quote=F,col.names = F)
 write.table(t(mat_ct[,names(status)]),sprintf('%s/cell_ct.tsv',out_fn),sep = '\t',quote=F,col.names = T)
 write.table(status, sprintf('%s/cell_classification.tsv',out_fn),sep = '\t',quote=F,col.names = F)
+message('Clicktag classification stats written.')
+
 ########## 4.5 Cell metadata ###################################################
 # we need to separate the simulation 
 md = data.frame(row.names = names(status),cdna_size = Matrix::colSums(mat_cdna)[names(status)],ct_size = Matrix::colSums(mat_ct)[names(status)])
@@ -375,19 +243,6 @@ abline(v = cz_small_thr,lty = 2,col = 'red')
 abline(v = cz_large_thr,lty = 2,col = 'red')
 abline(h = 1,lty = 2,col = 'red') # just to specify the enrichment 
 abline(h = median(lfc[rownames(md)]),lty = 2, col = 'blue')
-#par(mfrow = c(1,1))
-#plot(log10(Matrix::colSums(mat_cdna[,putative_cells_ids])),log10(Matrix::colSums(mat_ct[,putative_cells_ids])),
-#     pch = 16, col = scales::alpha('black',0.3),xlab = 'log10 cDNA UMIs', ylab = 'log10 CT UMIs',main = 'cDNA ~ CT [putative cells]')
-#lm1 = lm(log10(Matrix::colSums(mat_ct[,putative_cells_ids]))~log10(Matrix::colSums(mat_cdna[,putative_cells_ids])))
-#abline(lm1,col = 'red')
-
-#par(mfrow = c(4,2))
-#for(label in c(unlist(labels),bc2lib[!duplicated(bc2lib)])){
-#  if(sum(status == label)>10){
-#    plot(Matrix::colSums(mat_cdna[,names(status[status == label])]),Matrix::colSums(mat_ct[,names(status[status == label])]),
-#         pch = 16, col = scales::alpha('black',0.3),xlab = 'cDNA UMIs', ylab = 'CT UMIs',main = label,log = 'xy') 
-#  }
-#}
 dev.off()
 
 ##### 2. CT counts heatmaps ##########
@@ -474,7 +329,6 @@ boxplot(split(Matrix::colSums(mat_cdna_cells),rownames(mat_ct_cells)[apply(mat_c
 # 5. CT cell size by clicktag barcode (cells only)
 boxplot(split(Matrix::colSums(mat_ct_cells),rownames(mat_ct_cells)[apply(mat_ct_cells,2,which.max)]),
         log = 'y',ylab = 'UMI/Cell',
-        las=2,
         main = "CT cell size by clicktag barcode\n(cells only)")
 # 6. CT 1st-nth FC per barcode
 boxplot(split(log2_fist_nth,rownames(mat_ct_cells)[apply(mat_ct_cells,2,which.max)]),
@@ -508,4 +362,8 @@ points(c(rep(NA,3),swappers),col = 'red')
 abline(h = mean(swappers),col = 'red',lty = 2)
 dev.off()
 message("Clicktag pipeline done.")
+quit()
+
+
+
 
