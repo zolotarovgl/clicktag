@@ -38,10 +38,13 @@ suppressMessages(library("yaml"))
 suppressMessages(library("stringr"))
 suppressMessages(library("reshape2"))
 suppressMessages(library('circlize'))
+suppressMessages(library('deMULTIplex2'))
 source(sprintf('%s/helper.R',dir))
+#source('clicktag/helper.R')
 ############ -1. Input & Output ###############
+do_plots = F
 configfile = args[1]
-#configfile = 'configs/Mlei13.sim.sum.10.yaml'
+#configfile = 'lda.yaml'
 message(sprintf('Reading pipeline setttings from %s.',configfile))
 config = read_yaml(configfile)
 config = unlist(config)
@@ -57,7 +60,6 @@ if(!dir.exists(out_fn)){
 }
 figsdir = sprintf("%s/figs",out_fn)
 scdb_path = config['scdb_path'] # a path to where put the metacell object to
-
 
 ########### 0. Pipeline settings ##############
 cz_large_thr = as.integer(config[['cz_large_thr']])     # cells smaller or larger than this (in terms of expression) are considered non-cells
@@ -100,16 +102,25 @@ if('useLDA' %in% names(config)){
     message('Linear Discriminant Analysis has been specified.')
   }
   if(useLDA){
-    #postprob_thr = 0.99
     postprob_thr = as.numeric(config['Posterior_prob_threshold'])
-    multiplet_rate = as.numeric(config['Multiplet_rate'])
-    #multiplet_rate = 0.16 # assumed multiplet rate
+    message(paste0('Posterior prob threshold: ',postprob_thr))
+    #multiplet_rate = as.numeric(config['Multiplet_rate'])
+    #message(paste0('Assumed multiplet rate: ',multiplet_rate))
   }
 }else{
   useLDA = FALSE
 }
 
-# init metacell database to export the filtered matrix
+
+# check if DM2 should be used 
+if('useDM2' %in% names(config)){
+  useDM2 = as.logical(config['useDM2'])
+  if(useDM2){
+    message('Using Demultiplex2 package')
+  }
+}else{
+  useDM2 = FALSE
+}
 dir.create(scdb_path, showWarnings = TRUE,recursive = T)
 
 metacell::scdb_init(scdb_path,force_reinit=TRUE)
@@ -162,14 +173,62 @@ empty_set = mat_ct[,ambient_ids]
 probs = rowSums(empty_set)/sum(empty_set)
 # Simulate the cells:
 # - this step is used to tell apart the empty cells vs non-empty cells 
-status = .classify_cells_by_simulation(mat_ct[,putative_cells_ids],probs = probs,n_sim = n_sim,pval_thr = pval_thr,bc2lib = bc2lib,labels = labels,pval_mode = classification_mode,min_bc_matches = min_bc_matches)
+sim_res = .classify_cells_by_simulation(mat_ct[,putative_cells_ids],probs = probs,n_sim = n_sim,pval_thr = pval_thr,bc2lib = bc2lib,labels = labels,pval_mode = classification_mode,min_bc_matches = min_bc_matches)
+status = sim_res$status
+pval_mat = sim_res$pval_mat
 
-# LDA should be better here 
+
+
+if(useDM2){
+  mat_ct_sum = sapply(split(bct[,1],bct[,3]),FUN = function(x) rowSums(t(mat_ct[,putative_cells_ids])[,x]))
+  dim(mat_ct_sum)
+  res <- demultiplexTags(mat_ct_sum, # Required, the tag count matrix from your experiment, can be either dense or sparse
+                         plot.path = out_fn, # Where to output a summary plot
+                         plot.name = lib, # text append to the name of the summary plot file
+                         plot.diagnostics = FALSE) # Whether to output diagnostics plots for each tag
+  status_dm2 = res$final_assign  
+  status_dm2[status_dm2 == 'negative'] = labels[['label_ambient']]
+  status_dm2[status_dm2== 'multiplet'] = labels[['label_doublet']]
+  
+  # plot the comparison of the DM2 and simulation-based classification 
+  write.table(res$prob_mtx, sprintf('%s/dm2.probmat.tsv',out_fn),sep = '\t',quote=F,col.names = F)
+  
+  hm = .lda_sim_hm(status_input = status,status_lda = status_dm2)
+  fname = sprintf('%s/dm2_sim.pdf',figsdir)
+  pdf(fname)
+  draw(hm)
+  dev.off()
+  
+  write.table(status, sprintf('%s/sim.cell_classification.tsv',out_fn),sep = '\t',quote=F,col.names = F)
+  status = status_dm2
+}
+# LDA
 if(useLDA){
-  .run_lda()
-  raise('Not implemented yet')
+  # inputs 
+  #source('clicktag/helper.R')
+  lda_res = .run_lda(mat_ct = mat_ct,status = status[putative_cells_ids],bl_labels = labels,out_fn = out_fn)
+  
+  # write down the posterior probs
+  fname = sprintf('%s/lda.posterior.tsv',out_fn)
+  write.table(lda_res$pred$posterior,fname,sep = '\t',quote = F)
+  message(sprintf('Posterior probs written: %s', fname))
+  
+  # compare initial predictions and LDA 
+  hm = .lda_sim_hm(status_input = status,status_lda = lda_res$status)
+  fname = sprintf('%s/lda.pdf',figsdir)
+  pdf(fname)
+  draw(hm)
+  dev.off()
+  
+  input_doublet = sum(status == 'doublet')/length(status)
+  lda_doublet = sum(lda_res$status == 'doublet')/length(lda_res$status)
+  message(sprintf('Input doublet rate: %s', round(input_doublet,2)))
+  message(sprintf('LDA doublet rate: %s', round(lda_doublet,2)))
+  # 
+  write.table(status, sprintf('%s/lda.input_labels.tsv',out_fn),sep = '\t',quote=F,col.names = F)
+  status = lda_res$status
   }
-#message(cat(paste0(sapply(seq_along(levels(status)),FUN = function(i) paste0(names(table(status)[i]),' : ',table(status)[i])),collapse = '\n')))
+# Gather the outputs 
 ctstats = data.frame(.do_ct_report(status,labels,putative_cells_ids))
 # add cell filtering stats 
 ctstats$n_pass_cdna = n_pass_cdna
@@ -177,9 +236,11 @@ ctstats$n_pass_ct = n_pass_ct
 ctstats$too_big = too_big
 ctstats$too_small = too_small
 
+
 write.table(ctstats,sprintf('%s/ct_stats.tsv',out_fn),quote = F,sep = '\t',col.names = T,row.names = F)
 write.table(status, sprintf('%s/cell_classification.tsv',out_fn),sep = '\t',quote=F,col.names = F)
 write.table(t(mat_ct[,names(status)]),sprintf('%s/cell_ct.tsv',out_fn),sep = '\t',quote=F,col.names = T)
+write.table(pval_mat,sprintf('%s/pval_mat.tsv',out_fn),sep = '\t',quote=F,col.names = T)
 write.table(status, sprintf('%s/cell_classification.tsv',out_fn),sep = '\t',quote=F,col.names = F)
 message('Clicktag classification stats written.')
 
@@ -218,151 +279,157 @@ matid = lib
 metacell::scdb_add_mat(matid, mat_f)
 message(sprintf("Added a new mat object to %s:\n%s/mat.%s.Rda",scdb_path,scdb_path,matid))
 
-########### 5. QC and diagnostic plots #########################################
-##### 1. Scatterplot of cDNA UMIs vs CT per CT ##########
-par(cex.lab=0.5, cex.axis=0.5, cex.main=0.5, cex.sub=0.5)
-fname = sprintf('%s/qc_cdna_ct_size.pdf',figsdir)
-pdf(fname,height = 10, width = 10)
-par(mfrow = c(3,2))
-hist(log10(Matrix::colSums(mat_cdna)),breaks = 100,main = 'log10 cDNA UMIs [all droplets]',xlab = '')
-abline(v = log10(cz_small_thr),lty = 2,col = 'red')
-abline(v = log10(cz_large_thr),lty = 2,col = 'red')
-hist(log10(Matrix::colSums(mat_ct)),breaks = 100,main = 'log10 CT UMIs [all droplets]',xlab = '')
-abline(v = log10(min_ct),lty = 2,col = 'red')
-par(mfrow = c(3,2))
-plot(Matrix::colSums(mat_cdna),Matrix::colSums(mat_ct),pch = 16,cex = 0.3,col = scales::alpha('black',0.3),
-     log = 'xy',xlab = 'cDNA UMIs',ylab = 'CT UMIs',main = 'cDNA ~ CT [all droplets]')
-abline(v = cz_small_thr,lty = 2,col = 'red')
-abline(v = cz_large_thr,lty = 2,col = 'red')
-abline(h = min_ct,lty = 2,col = 'red')
-
-lfc = apply(mat_ct,2,FUN = function(x) log2(sum(sort(x,decreasing = T)[1:num_ct])/sum(sort(x,decreasing = T)[-c(1:num_ct)])))
-plot(Matrix::colSums(mat_cdna),lfc,pch = 16,cex = 0.3,col = scales::alpha('black',0.3),
-     log = 'xy',xlab = 'cDNA UMIs',ylab = sprintf('log2 [top %s CTs] / [non-top]',num_ct),main = 'cDNA ~ CT [all droplets]')
-abline(v = cz_small_thr,lty = 2,col = 'red')
-abline(v = cz_large_thr,lty = 2,col = 'red')
-abline(h = 1,lty = 2,col = 'red') # just to specify the enrichment 
-abline(h = median(lfc[rownames(md)]),lty = 2, col = 'blue')
-dev.off()
-
-##### 2. CT counts heatmaps ##########
-# - for top x cells including the empty 
-# - for selected cells
-fname = sprintf('%s/qc_ct_heatmap.pdf',figsdir)
-pdf(fname,height = 15, width = 10)
-par(mfrow = c(3,2))
-
-#ids_to_plot = c(putative_cells_ids,ambient_ids)
-ids_to_plot = putative_cells_ids  # 28.03.24 - changed to remove ambient profiles
-mr = as.matrix(t(mat_ct[,ids_to_plot]))
-m_n = t(t(mr) / Matrix::colSums(mr, na.rm = TRUE)) * 1e4
-m_n = apply(m_n, 2, function(c) c + quantile(c, 0.001, na.rm = TRUE))
-m_n = m_n [ order(apply(m_n, 1, function(x) which.max(zoo::rollmean(x,2)) )), ]
-
-mr = mr[rownames(m_n),]
-
-# split the rows
-rs = status[rownames(m_n)]
-rs[is.na(rs)] = labels[['label_ambient']]
-rs = factor(as.character(rs),levels = c(levels(rs)[-c(1:3)],levels(rs)[1:3]))
-relev = setNames(paste0(names(table(rs)),': ',table(rs)),names(table(rs)))
-rs = factor(relev[as.character(rs)],levels = relev[levels(rs)])
-
-# barplot with counts 
-barplot(table(rs),las=2)
-
-n_assigned = sum(table(md$clicktag_label))
-n_doublet = table(status)[labels[['label_doublet']]]
-n_ambiguous = table(status)[labels[['label_ambiguous']]]
-n_nonempty = sum(table(status)[names(table(status)) != labels[['label_ambient']]])
-l = sprintf('%s droplets assigned unambiguously to one of the batches;\n%s%% doublet rate (doublets / all non-ambient doublets)',
-            n_assigned,round((n_doublet+n_ambiguous)/n_nonempty*100,2))
-mtext(side=3, line=2, at=-0.07, adj=0, cex=0.7, l)
-# heatmap
-hm1 = Heatmap(mr,show_row_dend = F,show_column_dend = F,show_row_names = F,
-              cluster_columns = F,cluster_rows = F,col = xavis_green(mr),
-              border = T,bottom_annotation = NULL,row_title_rot = 0,column_title = 'Raw',
-              row_split = rs,row_title_gp = gpar(fontsize=5),show_heatmap_legend = F,use_raster = F)
-hm2 = Heatmap(m_n,show_row_dend = F,show_column_dend = F,show_row_names = F,
-              cluster_columns = F,cluster_rows = F,col = xavis_green(m_n),
-              border = T,bottom_annotation = NULL,row_title_rot = 0,column_title = 'Norm',
-              row_split = rs,row_title_gp = gpar(fontsize=5),show_heatmap_legend = F,use_raster = F)
-draw(hm1+hm2)
-dev.off()
-
-##### 3. CT efficiency ##########
-fname = sprintf('%s/qc_ct_efficiency.pdf',figsdir)
-pdf(fname)
-par(mfrow = c(2,3))
-#par(mar = c(3,2,3,2))
-par(cex.lab=0.5, cex.axis=0.5, cex.main=0.5, cex.sub=0.5,pch = 16)
-# 1. cDNA cell size by clicktag label (cells only)
-# 2. CT cell size by clicktag label (cells only)
-# 3. CT 1st-nth FC per clicktag label (cells only).
-#? 4. cDNA cell size per barcode (cells only)
-#? 5. CT cell size per barcode (cells only)
-#? 6. CT 1st-nth FC per barcode
-
-mat_cdna_cells = mat_cdna[,rownames(md)]
-mat_ct_cells = mat_ct[,rownames(md)]
-# 1. cDNA cell size by clicktag label (cells only)
-boxplot(split(Matrix::colSums(mat_cdna_cells),status),
-        log = 'y',ylab = 'UMI/Cell',
-        las=2,
-        main = "cDNA cell size by clicktag label\n(cells only)")
-# 2. CT cell size by clicktag label (cells only)
-boxplot(split(Matrix::colSums(mat_ct_cells),status),
-        log = 'y',ylab = 'UMI/Cell',
-        las=2,
-        main = " CT cell size by clicktag label\n(cells only)")
-# 3. CT 1st-nth FC per clicktag label (cells only).
-log2_fist_nth = apply(mat_ct_cells[,],2,FUN = function(x) log2(sort(x,decreasing = T)[1]/(sort(x,decreasing = T)[nth_ix]+1)))
-boxplot(split(log2_fist_nth,status[names(log2_fist_nth)]),
-        ylab = '1st-nth log2(FC)',
-        las=2,
-        main = "CT 1st-nth FC per clicktag label\n(cells only)")
-# 4. cDNA cell size per barcode (cells only)
-boxplot(split(Matrix::colSums(mat_cdna_cells),rownames(mat_ct_cells)[apply(mat_ct_cells,2,which.max)]),
-        log = 'y',ylab = 'UMI/Cell',
-        las=2,
-        main = "cDNA cell size by clicktag barcode\n(cells only)")
-# 5. CT cell size by clicktag barcode (cells only)
-boxplot(split(Matrix::colSums(mat_ct_cells),rownames(mat_ct_cells)[apply(mat_ct_cells,2,which.max)]),
-        log = 'y',ylab = 'UMI/Cell',
-        main = "CT cell size by clicktag barcode\n(cells only)")
-# 6. CT 1st-nth FC per barcode
-boxplot(split(log2_fist_nth,rownames(mat_ct_cells)[apply(mat_ct_cells,2,which.max)]),
-        ylab = '1st-nth log2(FC)',
-        las=2,
-        main = "CT 1st-nth FC per clicktag barcode\n(cells only)")
-
-# ambient clicktag proportions
-par(mfrow = c(2,3))
-barplot(probs,main = sprintf('Background CT proportions estimated from %s droplets',n_amb),ylim = c(0,1),
-        sub = 'Clicktag ambient proportions used as an input for classification.\n
+if(do_plots){
+  
+  ########### 5. QC and diagnostic plots #########################################
+  ##### 1. Scatterplot of cDNA UMIs vs CT per CT ##########
+  par(cex.lab=0.5, cex.axis=0.5, cex.main=0.5, cex.sub=0.5)
+  fname = sprintf('%s/qc_cdna_ct_size.pdf',figsdir)
+  pdf(fname,height = 10, width = 10)
+  par(mfrow = c(3,2))
+  hist(log10(Matrix::colSums(mat_cdna)),breaks = 100,main = 'log10 cDNA UMIs [all droplets]',xlab = '')
+  abline(v = log10(cz_small_thr),lty = 2,col = 'red')
+  abline(v = log10(cz_large_thr),lty = 2,col = 'red')
+  hist(log10(Matrix::colSums(mat_ct)),breaks = 100,main = 'log10 CT UMIs [all droplets]',xlab = '')
+  abline(v = log10(min_ct),lty = 2,col = 'red')
+  par(mfrow = c(3,2))
+  plot(Matrix::colSums(mat_cdna),Matrix::colSums(mat_ct),pch = 16,cex = 0.3,col = scales::alpha('black',0.3),
+       log = 'xy',xlab = 'cDNA UMIs',ylab = 'CT UMIs',main = 'cDNA ~ CT [all droplets]')
+  abline(v = cz_small_thr,lty = 2,col = 'red')
+  abline(v = cz_large_thr,lty = 2,col = 'red')
+  abline(h = min_ct,lty = 2,col = 'red')
+  
+  lfc = apply(mat_ct,2,FUN = function(x) log2(sum(sort(x,decreasing = T)[1:num_ct])/sum(sort(x,decreasing = T)[-c(1:num_ct)])))
+  plot(Matrix::colSums(mat_cdna),lfc,pch = 16,cex = 0.3,col = scales::alpha('black',0.3),
+       log = 'xy',xlab = 'cDNA UMIs',ylab = sprintf('log2 [top %s CTs] / [non-top]',num_ct),main = 'cDNA ~ CT [all droplets]')
+  abline(v = cz_small_thr,lty = 2,col = 'red')
+  abline(v = cz_large_thr,lty = 2,col = 'red')
+  abline(h = 1,lty = 2,col = 'red') # just to specify the enrichment 
+  abline(h = median(lfc[rownames(md)]),lty = 2, col = 'blue')
+  dev.off()
+  
+  ##### 2. CT counts heatmaps ##########
+  # - for top x cells including the empty 
+  # - for selected cells
+  fname = sprintf('%s/qc_ct_heatmap.pdf',figsdir)
+  pdf(fname,height = 15, width = 10)
+  par(mfrow = c(3,2))
+  
+  #ids_to_plot = c(putative_cells_ids,ambient_ids)
+  ids_to_plot = putative_cells_ids  # 28.03.24 - changed to remove ambient profiles
+  mr = as.matrix(t(mat_ct[,ids_to_plot]))
+  m_n = t(t(mr) / Matrix::colSums(mr, na.rm = TRUE)) * 1e4
+  m_n = apply(m_n, 2, function(c) c + quantile(c, 0.001, na.rm = TRUE))
+  m_n = m_n [ order(apply(m_n, 1, function(x) which.max(zoo::rollmean(x,2)) )), ]
+  
+  mr = mr[rownames(m_n),]
+  
+  # split the rows
+  rs = status[rownames(m_n)]
+  rs[is.na(rs)] = labels[['label_ambient']]
+  rs = factor(as.character(rs),levels = c(levels(rs)[-c(1:3)],levels(rs)[1:3]))
+  relev = setNames(paste0(names(table(rs)),': ',table(rs)),names(table(rs)))
+  rs = factor(relev[as.character(rs)],levels = relev[levels(rs)])
+  
+  
+  n_assigned = sum(table(md$clicktag_label))
+  n_doublet = table(status)[labels[['label_doublet']]]
+  n_ambiguous = table(status)[labels[['label_ambiguous']]]
+  n_nonempty = sum(table(status)[names(table(status)) != labels[['label_ambient']]])
+  l = sprintf('%s droplets assigned unambiguously to one of the batches;\n%s%% doublet rate (doublets / all non-ambient doublets)',
+              n_assigned,round((n_doublet+n_ambiguous)/n_nonempty*100,2))
+  mtext(side=3, line=2, at=-0.07, adj=0, cex=0.7, l)
+  # heatmap
+  hm1 = Heatmap(mr,show_row_dend = F,show_column_dend = F,show_row_names = F,
+                cluster_columns = F,cluster_rows = F,col = xavis_green(mr),
+                border = T,bottom_annotation = NULL,row_title_rot = 0,column_title = 'Raw',
+                row_split = rs,row_title_gp = gpar(fontsize=5),show_heatmap_legend = F,use_raster = F)
+  hm2 = Heatmap(m_n,show_row_dend = F,show_column_dend = F,show_row_names = F,
+                cluster_columns = F,cluster_rows = F,col = xavis_green(m_n),
+                border = T,bottom_annotation = NULL,row_title_rot = 0,column_title = 'Norm',
+                row_split = rs,row_title_gp = gpar(fontsize=5),show_heatmap_legend = F,use_raster = F)
+  draw(hm1+hm2)
+  dev.off()
+  
+  ##### 3. CT efficiency ##########
+  fname = sprintf('%s/qc_ct_efficiency.pdf',figsdir)
+  pdf(fname)
+  par(mfrow = c(2,3))
+  #par(mar = c(3,2,3,2))
+  par(cex.lab=0.5, cex.axis=0.5, cex.main=0.5, cex.sub=0.5,pch = 16)
+  # 1. cDNA cell size by clicktag label (cells only)
+  # 2. CT cell size by clicktag label (cells only)
+  # 3. CT 1st-nth FC per clicktag label (cells only).
+  #? 4. cDNA cell size per barcode (cells only)
+  #? 5. CT cell size per barcode (cells only)
+  #? 6. CT 1st-nth FC per barcode
+  
+  mat_cdna_cells = mat_cdna[,rownames(md)]
+  mat_ct_cells = mat_ct[,rownames(md)]
+  # 1. cDNA cell size by clicktag label (cells only)
+  boxplot(split(Matrix::colSums(mat_cdna_cells),status),
+          log = 'y',ylab = 'UMI/Cell',
+          las=2,
+          main = "cDNA cell size by clicktag label\n(cells only)")
+  # 2. CT cell size by clicktag label (cells only)
+  boxplot(split(Matrix::colSums(mat_ct_cells),status),
+          log = 'y',ylab = 'UMI/Cell',
+          las=2,
+          main = " CT cell size by clicktag label\n(cells only)")
+  # 3. CT 1st-nth FC per clicktag label (cells only).
+  log2_fist_nth = apply(mat_ct_cells[,],2,FUN = function(x) log2(sort(x,decreasing = T)[1]/(sort(x,decreasing = T)[nth_ix]+1)))
+  boxplot(split(log2_fist_nth,status[names(log2_fist_nth)]),
+          ylab = '1st-nth log2(FC)',
+          las=2,
+          main = "CT 1st-nth FC per clicktag label\n(cells only)")
+  # 4. cDNA cell size per barcode (cells only)
+  boxplot(split(Matrix::colSums(mat_cdna_cells),rownames(mat_ct_cells)[apply(mat_ct_cells,2,which.max)]),
+          log = 'y',ylab = 'UMI/Cell',
+          las=2,
+          main = "cDNA cell size by clicktag barcode\n(cells only)")
+  # 5. CT cell size by clicktag barcode (cells only)
+  boxplot(split(Matrix::colSums(mat_ct_cells),rownames(mat_ct_cells)[apply(mat_ct_cells,2,which.max)]),
+          log = 'y',ylab = 'UMI/Cell',
+          main = "CT cell size by clicktag barcode\n(cells only)")
+  # 6. CT 1st-nth FC per barcode
+  boxplot(split(log2_fist_nth,rownames(mat_ct_cells)[apply(mat_ct_cells,2,which.max)]),
+          ylab = '1st-nth log2(FC)',
+          las=2,
+          main = "CT 1st-nth FC per clicktag barcode\n(cells only)")
+  
+  # ambient clicktag proportions
+  par(mfrow = c(2,3))
+  barplot(probs,main = sprintf('Background CT proportions estimated from %s droplets',n_amb),ylim = c(0,1),
+          sub = 'Clicktag ambient proportions used as an input for classification.\n
         They are estimated by taking X lowest-size droplets (cDNA determined) and averaging across those.')
-abline(h = 1/length(probs),lty = 2)
-# compute the UMIfrac of the top clicktag combination 
-prop_top_ct = setNames(sapply(1:ncol(mat_ct_cells),FUN = function(i){
-  x = mat_ct_cells[,i]
-  target_ct = names(bc2lib[bc2lib==status[colnames(mat_ct_cells)][i]])
-  sum(x[target_ct])/sum(x)
-}),colnames(mat_ct_cells))
-
-
-# the ratio of the off-target clicktags for every cell
-boxplot(split(prop_top_ct,status[names(prop_top_ct)]),
-        ylab = '[top CT combionation]/[CT library size]',
-        las=2,
-        outline=FALSE,
-        main = "Proportion of UMIs coming from a top combination\n(cells only)",
-        sub = 'The proportion of UMIs coming from the clicktag combination the droplet has been assigned to.\nThe points and a line specify the rate of swappers (1-top_umifrac).')
-swappers = 1-sapply(split(prop_top_ct,status[names(prop_top_ct)])[-c(1:3)],FUN = function(x) median(x,na.rm = T))
-points(c(rep(NA,3),swappers),col = 'red')
-abline(h = mean(swappers),col = 'red',lty = 2)
-dev.off()
-message("Clicktag pipeline done.")
-quit()
+  abline(h = 1/length(probs),lty = 2)
+  # compute the UMIfrac of the top clicktag combination 
+  prop_top_ct = setNames(sapply(1:ncol(mat_ct_cells),FUN = function(i){
+    x = mat_ct_cells[,i]
+    target_ct = names(bc2lib[bc2lib==status[colnames(mat_ct_cells)][i]])
+    sum(x[target_ct])/sum(x)
+  }),colnames(mat_ct_cells))
+  
+  
+  # the ratio of the off-target clicktags for every cell
+  boxplot(split(prop_top_ct,status[names(prop_top_ct)]),
+          ylab = '[top CT combionation]/[CT library size]',
+          las=2,
+          outline=FALSE,
+          main = "Proportion of UMIs coming from a top combination\n(cells only)",
+          sub = 'The proportion of UMIs coming from the clicktag combination the droplet has been assigned to.\nThe points and a line specify the rate of swappers (1-top_umifrac).')
+  swappers = 1-sapply(split(prop_top_ct,status[names(prop_top_ct)])[-c(1:3)],FUN = function(x) median(x,na.rm = T))
+  points(c(rep(NA,3),swappers),col = 'red')
+  abline(h = mean(swappers),col = 'red',lty = 2)
+  dev.off()
+  
+  
+  
+}
+message("Clicktag pipeline done.") 
+   
+   
+   
 
 
 

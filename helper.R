@@ -56,6 +56,34 @@ xavis_green = function(m=NULL,qs = c(.25,.5,.75,.99),reverse = F){
   return(colorRamp2(c(quantile(m, qs[1]),quantile(m, qs[3]),quantile(m, qs[3]),quantile(m, qs[4])),pal))
 }
 
+
+.ct_import_data = function(ctmat_fn,cdna_lib_fn,ctbcs_fn){
+  
+  message('1. Loading data')
+  message(paste0('Loading CT counts from: ',ctmat_fn))
+  mat_ct = .ct_load_ct(ctmat_fn)
+  message(paste0('Loading cDNA counts from: ',cdna_lib_fn,'\n'))
+  mat_cdna = .ct_load_cr(cdna_lib_fn)
+  int = intersect(colnames(mat_ct),colnames(mat_cdna))
+  message(sprintf('%s common barcodes.',length(int)))
+  mat_ct = mat_ct[,int]
+  mat_cdna = mat_cdna[,int]
+  # reorder cDNA matrix by the library size:
+  mat_cdna = mat_cdna[,order(Matrix::colSums(mat_cdna),decreasing = T)]
+  mat_ct = mat_ct[,colnames(mat_cdna)]
+  N_CT_UMI=sum(mat_ct)
+  message(sprintf('Total number of CT UMIs: %s',N_CT_UMI))
+  # Load barcode information:
+  bct = .ct_load_bc(ctbcs_fn,verbose = T)
+  bc2lib = setNames(bct$barcode_pair,bct$name)
+  
+  
+  assign("mat_ct", mat_ct, envir = .GlobalEnv)
+  assign("mat_cdna", mat_cdna, envir = .GlobalEnv)
+  assign("bct", bct, envir = .GlobalEnv)
+  assign("bc2lib", bc2lib, envir = .GlobalEnv)
+}
+
 ################################################################################
 # Cell classification 
 ################################################################################
@@ -118,7 +146,7 @@ xavis_green = function(m=NULL,qs = c(.25,.5,.75,.99),reverse = F){
     pval_mat = t(apply(mat_ct[,],2,FUN = function(x){
       .pval_bysum(x,probs,n_sim)
     }))
-    message('Done!')
+    message('Simulation done!')
     
     pass_mat = pval_mat<=pval_thr
     
@@ -141,8 +169,15 @@ xavis_green = function(m=NULL,qs = c(.25,.5,.75,.99),reverse = F){
   }
   levs = c(c(labels[['label_ambient']],labels[['label_ambiguous']],labels[['label_doublet']]),bc2lib[!duplicated(bc2lib)])
   status = factor(status, levels = levs)
-  return(status)
+  return(list(status = status, pval_mat = pval_mat))
 }
+
+.ct_sum_by_sample = function(mat_ct,bct){
+  sapply(split(bct$name,bct$barcode_pair),FUN = function(x){
+    colSums(mat_ct[x,])
+  })
+}
+
 
 # Reporting 
 .do_ct_report = function(status,labels){
@@ -202,21 +237,56 @@ xavis_green = function(m=NULL,qs = c(.25,.5,.75,.99),reverse = F){
   return(o)
 }
 
+.estimate_doublet_rate = function(n_cells){
+  # Publicly available multiplet rates 
+  # https://www.biostars.org/p/9467937/
+  exp = data.frame(
+    rd = c(0.4, 0.8, 1.6, 2.3, 3.1, 3.9, 4.6, 5.4, 6.1, 6.9, 7.6)/100,
+    n_cells_loaded = c(800, 1600, 3200, 4800, 6400, 8000, 9600, 11200, 12800, 14400, 16000),
+    n_cells_recovered = c(500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000)
+  )
+  colnames(exp) = c('rd','n_cells_loaded','n_cells_recovered')
+  lm1 = lm(data = exp,rd ~ n_cells_recovered)
+  return(predict(lm1,data.frame(n_cells_recovered = n_cells)))
+}
 
-.run_lda = function(){
-  raise('Not implemented')
+.run_lda = function(mat_ct,status,bl_labels,out_fn,postprob_thr = 0.9, multiplet_rate = NULL, clicktag_efficiency = NULL){
+  require(MASS)
+  if(is.null(multiplet_rate)){
+    message("Multiplet rate hasn't been specified! Estimating using recovered cell counts")
+    n_cells = length(status)
+    global_multiplet_rate = round(.estimate_doublet_rate(n_cells),2)
+    message(sprintf('Estimated multiplet rate for %s cells: %s',n_cells, global_multiplet_rate))
+    # account for stained and unstained doublets"
+    # Aimed stained doublet rate: Rc^2 * Rd 
+    stained_multiplet_rate = global_multiplet_rate * clicktag_efficiency^2
+    message(sprintf('Estimated stained multiplet rate: %s', stained_multiplet_rate))
+    # ultiplet_rate = stained_multiplet_rate
+    # CAVE: force more multiplets than actually expected!
+    #multiplet_rate = global_multiplet_rate
+    multiplet_rate = stained_multiplet_rate
+  }else{
+    message(sprintf('Multiplet rate specified: %s',round(multiplet_rate,2)))
+  }
+   # labels to exclude from training 
+  sample_labels = levels(status)[!levels(status) %in% bl_labels]
+  
+  
+  # The training excludes the doublets 
+  #############################################
+  
+  #stop("This feature is not yet implemented.")
   # LDA is trained on the cells labeled by simulation
-  library(MASS)
   message("Training LDA classifier using positive examples")
-  
   message(sprintf('Posterior probability threshold: %s',postprob_thr))
+  message(sprintf('Assumed multiplet rate: %s',multiplet_rate))
   
-  bl_labels = unlist(labels) # labels to exclude from training 
-  
+  # use 60% of the cells for training 
   n_train = round(length(status[!status %in% bl_labels])*0.6)
   message(sprintf('%s train examples.',n_train))
   train_ids = names(sample(status[!status %in% bl_labels],n_train,replace = F))
   test_ids = names(status[!status %in% bl_labels])[!names(status[!status %in% bl_labels]) %in% train_ids]
+  test_dbl_ids = names(status)[status == 'doublet']
   
   training = as.data.frame(t(mat_ct[,train_ids]))
   training = log(training+1)
@@ -226,6 +296,7 @@ xavis_green = function(m=NULL,qs = c(.25,.5,.75,.99),reverse = F){
   test = log(test+1)
   test$label = as.character(status[rownames(test)])
   
+  test_dbl = log(as.data.frame(t(mat_ct[,test_dbl_ids]))+1)
   
   linear = lda(label ~ ., data = training)
   pred = predict(linear, training)$class
@@ -236,8 +307,8 @@ xavis_green = function(m=NULL,qs = c(.25,.5,.75,.99),reverse = F){
   tab <- table(Predicted = pred, Actual = test$label)
   test_acc = round(sum(diag(tab))/sum(tab),2)
   
-  message(sprintf('Training accuracy: %s',train_acc))
-  message(sprintf('Test accuracy: %s',test_acc))
+  #message(sprintf('Training accuracy: %s',train_acc))
+  #message(sprintf('Test accuracy: %s',test_acc))
   
   # CAVE: the ground truth is unknown here 
   train_ids = names(status[!status %in% unlist(labels)])
@@ -245,8 +316,11 @@ xavis_green = function(m=NULL,qs = c(.25,.5,.75,.99),reverse = F){
   training = log(training+1)
   training$label = as.character(status[rownames(training)])
   linear = lda(label ~ ., data = training)
-  saveRDS(linear,sprintf('%s/lda.RData',out_fn))
-  linear = readRDS(sprintf('%s/lda.RData',out_fn))
+  
+  fname = sprintf('%s/lda.RData',out_fn)
+  saveRDS(linear,fname)
+  sprintf('Model saved: %s',fname)
+  linear = readRDS(fname)
   
   # ploat loadings 
   m = as.matrix(linear$scaling)
@@ -259,26 +333,39 @@ xavis_green = function(m=NULL,qs = c(.25,.5,.75,.99),reverse = F){
   topredict = as.data.frame(log(t(mat_ct[,topredict_ids])+1))
   pred = predict(linear, topredict)
   predicted = setNames(pred$class,rownames(topredict))
-  
-  # now, identify the doublets
+  ##############################################################################
+  # now, identify the doublets by selecting the non-top probability threshold
   # multiplet rate should be 12-20% 
+  # can we "slide" the probability threshold to get the correct number of doublets? 
   top_prob = apply(pred$posterior,1,max)
   nontop_prob = 1-apply(pred$posterior,1,FUN = function(x) sort(x,decreasing = T)[1])
   thrs = seq(0.0001,0.1,0.0001)
-  
+
   multiplet_rates = sapply(thrs,FUN = function(x) sum(nontop_prob>=x)/length(nontop_prob))
   nontop_thr = thrs[which.min(abs(multiplet_rates-multiplet_rate))] # select the threshold that gives the 
   message(sprintf('LDA: Selected non-top posterior prob threshold: %s',nontop_thr))
+  
   # closest proportion of multiplets to the aimed proportion 
   # you can also classify the multiplets here.
+  # we have to add this on top of the real cells!
   status2 = setNames(as.character(apply(pred$posterior,1,FUN = function(x) colnames(pred$posterior)[which.max(x)])),rownames(pred$posterior))
   status2[top_prob<postprob_thr] = labels['label_ambiguous']
   status2[nontop_prob >= nontop_thr] = 'doublet'
   status2 = c(status2,setNames(as.character(status[status %in% labels['label_ambient']]),names(status[status %in% labels['label_ambient']])))
   status2 = status2[names(status)]
-  # now you can compare 2 classifications 
-  d = data.frame(by_sim = as.character(status),by_lda = as.character(status2))
-  m = dcast(d,by_sim ~ by_lda,fill = 0)
+  
+  status_res = status2
+  status_res[status == 'doublet' | status2 == 'doublet'] = 'doublet'
+  status_res = factor(status_res,levels = c(labels,sample_labels))
+  # save posterior probabilities
+  return(list(status = status_res, pred = pred))
+}
+
+
+
+.lda_sim_hm = function(status_input,status_lda){
+  d = data.frame(input = as.character(status_input),by_lda = as.character(status_lda))
+  m = dcast(d,input ~ by_lda,fill = 0)
   rownames(m) = m[,1]
   m = m[,-1]
   m = m[!rownames(m) %in% labels[labels != labels['label_doublet']],]
@@ -301,49 +388,5 @@ xavis_green = function(m=NULL,qs = c(.25,.5,.75,.99),reverse = F){
                column_title = 'LDA classification',
                row_title = 'Simulation'
   )
-  
-  status_res = status2
-  status_res[status == 'doublet' | status2 == 'doublet'] = 'doublet'
-  sum(status_res == 'doublet')/length(status_res) # global status res
-  sum(status_res == 'doublet')/length(status_res[status_res != 'ambient']) # stained doublet rate
-  status = factor(status_res,levels = c(labels,bct$barcode_pair[!duplicated(bct$barcode_pair)]))
-  
-  # doublet counts heatmap 
-  m = pred$posterior
-  nontop_prob = 1-apply(m,1,FUN = function(x) sort(x,decreasing = T)[1])
-  m = m[nontop_prob>=nontop_thr,]
-  # now, how do we assign them? 
-  # types of doublets:
-  dbl_thr = 1-postprob_thr
-  dbl = apply(m>=dbl_thr,1,FUN = function(x) paste0(sort(colnames(m)[which(x)]),collapse = '.'))
-  dbl = dbl[str_count(dbl,'\\.')==1]
-  d = as.data.frame(do.call(rbind,str_split(dbl,'\\.')))
-  rownames(d) = names(dbl)
-  d$V1 = factor(d$V1,levels = bct$barcode_pair[!duplicated(bct$barcode_pair)])
-  d$V2 = factor(d$V2,levels = bct$barcode_pair[!duplicated(bct$barcode_pair)])
-  m = dcast(d,V1 ~ V2,fill = 0,drop = F)
-  rownames(m) = m[,1]
-  m = m[,-1]
-  m = m/sum(m)
-  m[m==0] = NA
-  hm_dbl = Heatmap(m,cluster_rows = F,cluster_columns = F,
-                   height = nrow(m)*ch,
-                   width = ncol(m)*cw,
-                   cell_fun = function(j, i, x, y, w, h, col) { # add text to each grid
-                     if(!is.na(m[i, j])){
-                       grid.text(round(m[i, j]*100,1), x, y)
-                     }
-                   },column_title = sprintf('Doublet proportions: %s droplets',nrow(d)))
-  
-  message('how about here?')
-  # Plot 
-  fname = sprintf('%s/lda.pdf',figsdir)
-  pdf(fname,height = 10, width = 10)
-  draw(hm_lda)
-  draw(hm)
-  draw(hm_dbl)
-  dev.off()  
-  
-  # save posterior probabilities
-  write.table(pred$posterior,sprintf('%s/lda.posterior.tsv',out_fn),sep = '\t',quote = F)
+  return(hm)
 }
